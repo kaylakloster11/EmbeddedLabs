@@ -1,0 +1,115 @@
+ #include "msp.h"
+#include "lab4.h"
+#include "adc.h"
+#include "adc_circbuf.h"
+#include <stdint.h>
+#define SCB_SCR_ENABLE_SLEEPONEXIT (0x00000002)
+
+/**
+ * main.c
+ */
+
+volatile uint16_t NADC_Value;
+volatile int ButtonEnter = 0;
+
+#ifdef QUESTION6
+    CircBuf_t buf1;
+    CircBuf_t * buf = &buf1;
+#endif
+
+void main(void)
+{
+	WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;		// stop watchdog timer
+	configure_ADC(); //Configure ADC for interrupts
+	UART_Configure();
+#ifdef QUESTION6
+    CLK_init();
+     timer_a0_config();
+     CB_initialize_buffer(&buf, BUFFER);
+     NVIC_EnableIRQ(PORT1_IRQn);
+#endif
+	__enable_interrupt();
+	SCB->SCR &= ~SCB_SCR_ENABLE_SLEEPONEXIT; //Wake up on exit from ISR
+	ADC14->CTL0 |= ADC14_CTL0_ENC;
+
+#ifdef TEST
+	CLK_init();
+	timer_a0_config();
+	__enable_interrupt();
+#endif
+
+#ifdef QUESTION4
+	uint8_t labelC[] =" Celsius";
+	uint8_t labelF[] = " Fahrenheit";
+	uint8_t labelK[] = " Kelvin";
+	float V_sense, TempC, TempF, TempK;
+#endif
+
+	while(1) {
+
+#ifdef QUESTION4
+	   ADC14->CTL0 |=  ADC14_CTL0_SC;        // Start sampling/conversion
+	   __sleep(); //Blocks here until conversion finished
+#endif
+
+#ifdef QUESTION4
+	    V_sense = (((float)NADC_Value * VREF)/RESOLUTION);
+         TempC = ((V_sense - V_SENSOR)/TC_SENSOR)*1000;
+         TempK = TempC + 273.15;
+         TempF = (TempC * 1.8 ) + 32.0;
+         char printC[10], printK[10], printF[10];
+         ftoa(TempC, printC, 3);
+         ftoa(TempK, printK, 3);
+         ftoa(TempF, printF, 3);
+         uint32_t length_C = strlen((char *)printC);
+         uint32_t length_K = strlen((char *)printK);
+         uint32_t length_F = strlen((char *)printF);
+         UART_send_n(&printC,length_C);
+         UART_send_n(labelC, 8);
+         UART_send_byte(0x20);
+         UART_send_n(&printK,length_K);
+         UART_send_n(labelK, 7);
+         UART_send_byte(0x20);
+         UART_send_n(&printF,length_F);
+         UART_send_n(labelF, 11);
+         UART_send_byte(0x0A);
+#endif
+
+#ifdef QUESTION6
+    __sleep(); //Blocks here until conversion finished
+    if(ButtonEnter){
+        __disable_interrupt();
+        ADC14->IER0 &= ~(ADC14_IER0_IE0);
+          float getNADC = (float)CB_remove_item_from_buffer(buf);
+          while(!CB_is_buffer_empty(buf)){
+              float getNADC = (float)CB_remove_item_from_buffer(buf);
+              float V_sense = ((getNADC * VREF)/RESOLUTION);
+              float Temp = ((V_sense - V_SENSOR)/TC_SENSOR)*1000;
+              char temp[10];
+              ftoa(Temp, temp, 3);
+              uint32_t lengthN = strlen((char *)temp);
+              UART_send_n(&temp, lengthN);
+            }
+          CB_clear_buffer(buf);
+          ADC14->IER0 |= (ADC14_IER0_IE0);
+          __enable_interrupt();
+      }
+
+    if(CB_is_buffer_full(buf)){
+       P1->DIR |= BIT0;
+     }
+    CB_add_item_to_buffer(buf, NADC_Value);
+
+#endif
+	    __no_operation(); //No-Operation, good for breakpoint
+	}
+}
+
+
+
+
+
+
+
+
+

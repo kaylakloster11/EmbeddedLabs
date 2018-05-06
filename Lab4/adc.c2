@@ -1,0 +1,152 @@
+/*
+ * adc.c
+ *
+ *  Created on: Oct 15, 2017
+ *      Author: Kayla
+ */
+#include "msp.h"
+#include "adc.h"
+#include <stdint.h>
+#include "lab4.h"
+
+#ifdef QUESTION6
+void PORT1_IRQHandler(){
+    int i;
+    for(i=0; i<= 5000; i++);
+    if(P1->IFG && (BIT1 | BIT4))  {
+       ButtonEnter = 1; //initialize uart
+        P1->IFG &= ~(BIT1 | BIT4); //clear flag
+    }
+ }
+#endif
+
+void ADC14_IRQHandler() {
+    if(ADC14->IFGR0 & ADC14_IFGR0_IFG0){
+        P1->OUT ^= BIT0; //Output set to High
+        NADC_Value = ADC14->MEM[0];
+    }
+ }
+
+void configure_ADC(void){
+    P8->SEL0 |= BIT3; //Set A22 temp sensor analog configuration for P8.3
+    P8->SEL1 |= BIT3;
+    ADC14->CTL0 &= ~ADC14_CTL0_ENC; //Disable Conversions
+    //Initialize the shared reference module
+    //By default, REFMSTR=1 => REFCTL is used to configure the internal reference
+    while(REF_A->CTL0 & REF_A_CTL0_GENBUSY); //If ref generator busy, WAIT
+        REF_A->CTL0 = REF_A_CTL0_VSEL_0 | REF_A_CTL0_ON; //Enable internal 1.2V ref
+        REF_A->CTL0 &= ~REF_A_CTL0_TCOFF;  //Turn on Temp Sensor
+    //Configure ADC - Pulse sample mode; ADC14SC trigger
+    // ADC ON, temperature sample period>30us
+#ifdef QUESTION6
+     ADC14->CTL0 = (ADC14_CTL0_SHS_1 |  ADC14_CTL0_SHP | ADC14_CTL0_SHT0_5 |
+            ADC14_CTL0_ON | ADC14_CTL0_CONSEQ_2); //Configure to make analog-to-digital conversion at rising edge of our TIMERA0 clock input,
+                // set to sample-and-hold pulse-mode select, sample-and-hold time is 96 ADC14CLK cycles, ADC14_CTL0_CONSEQ_2
+    ADC14->CTL1 |= ADC14_CTL1_TCMAP | ADC14_CTL1_RES__14BIT ; //Conf internal temp sensor channel, set resolution
+    /* Left and right button configure */
+       P1->SEL0 &= ~(BIT1 | BIT4 | BIT7);     //Use the OR function to set BIT1 and BIT4 to general IO Mode
+       P1->SEL1 &= ~(BIT1 | BIT4 |BIT7) ;     //^^^
+       P1->DIR |= BIT7; //Set pin P1.7 as an output
+       P1->DIR &= ~(BIT1 | BIT4);       //Direction pin is set to zero since BIT1 and BIT4 are inputs
+       P1->REN |= BIT1 | BIT4 ;        //REN is set to 1 at BIT1 and BIT4 in order to enable pullup/pulldown
+       P1->OUT |= BIT1 | BIT4 ;        //Output resgister is set to 1 to enable the pullup resister
+       P1->IFG = 0;                    //interrupt flag is set to zero
+       P1->IES |= BIT1  | BIT4;        //high-to-low transition
+       P1->IE |= BIT1 | BIT4 ;          //interrupts are enabled
+#endif
+
+#ifdef QUESTION4
+    ADC14->CTL0 |= ADC14_CTL0_SHT0_5 | ADC14_CTL0_ON | ADC14_CTL0_SHP | ADC14_CTL0_SHS_0;
+    ADC14->CTL1 |= ADC14_CTL1_TCMAP | ADC14_CTL1_RES__14BIT ; //Conf internal temp sensor channel, set resolution
+#endif
+
+    ADC14->MCTL[0] = (ADC14_MCTLN_VRSEL_0 | ADC14_MCTLN_INCH_22) ; //Map temp analog channel to MEM0/MCTL0, set 3.3v ref
+    ADC14->IER0 = (ADC14_IER0_IE0); //Enable MCTL0/MEM0 Interrupts and analog pin 22
+    P1->SEL0 &= ~BIT0; //General I/O Mode
+    P1->SEL1 &= ~BIT0;
+    P1->DIR |= BIT0; //Set P1.0 LED to output
+    P1->OUT &= ~BIT0; //Output set to LOW
+
+    while(!(REF_A->CTL0 & REF_A_CTL0_GENRDY)); //Wait for ref generator to settle
+    NVIC_EnableIRQ(ADC14_IRQn); //Enable ADC int in NVIC module
+}
+
+#ifdef QUESTION6
+
+void CLK_init()
+{
+    //Set clock to 48 MHz
+    CS->KEY  =   CS_KEY_VAL;             //Unlock CS registers
+    CS->CTL0 = 0;
+    CS->CTL0 = (CS_CTL0_DCORSEL_1);
+    CS->CTL1 |=   (CS_CTL1_DIVS__8 | CS_CTL1_SELA_2 | CS_CTL1_SELS_3 | CS_CTL1_SELM_3);         //Use DCOCLK as source for MCLK, SMCLK + HSMCLK
+    CS->KEY =  0;                      //Re-lock CS registers
+}
+
+
+void timer_a0_config(){
+    P2->DIR |= BIT4;
+    P2->SEL0 |= BIT4;
+    P2->SEL1 &= ~BIT4;
+    TIMER_A0->R = 0 ;         // Reset count
+    TIMER_A0->CTL = (TIMER_A_CTL_SSEL__SMCLK | TIMER_A_CTL_ID__8 | TIMER_A_CTL_MC_1) ; //Set SMCLK Multiplexer mode clock source, divide by 8
+        // and Up mode (BIT5,BIT4 = 01) and enable interrupt for timer register (enable TAIE flag)
+   TIMER_A0->CCR[1] = 45874;    // Value to count to TAxCCRn holds the data for the comparison to the timer value
+          //in the Timer_A Register, TAxR.
+    TIMER_A0->CCR[0] = 46874;
+    TIMER_A0->CCTL[1] = TIMER_A_CCTLN_OUTMOD_3;   // Capture/Compare interrupt enabled @ peripheral  (CCIE flag enabled)
+    TIMER_A0->CTL &= ~(TIMER_A_CCTLN_CAP); // set BIT8 to zero to set to compare mode (CAP = 0)
+        TIMER_A0->CTL &= ~(TIMER_A_CCTLN_CAP); // set BIT8 to zero to set to compare mode (CAP = 0)
+}
+#endif
+
+#ifdef TEST
+void CLK_init()
+{
+    //Set clock to 48 MHz
+    CS->KEY  =   CS_KEY_VAL;             //Unlock CS registers
+    CS->CTL0 = 0;
+    CS->CTL0 = (CS_CTL0_DCORSEL_1);
+    CS->CTL1 |=   (CS_CTL1_DIVS__8 | CS_CTL1_SELA_2 | CS_CTL1_SELS_3 | CS_CTL1_SELM_3);         //Use DCOCLK as source for MCLK, SMCLK + HSMCLK
+    CS->KEY =  0;                      //Re-lock CS registers
+}
+void TA0_0_IRQHandler()
+{
+    if(TIMER_A0->CCTL[0] & TIMER_A_CCTLN_CCIFG ) {
+        P1->OUT ^=  BIT0;
+        TIMER_A0->CCTL[0] &=  ~TIMER_A_CCTLN_CCIFG;
+    }
+}
+
+void timer_a0_config(){
+    P2->DIR |= BIT4;
+    P2->SEL0 |= BIT4;
+    P2->SEL1 &= ~BIT4;
+    TIMER_A0->R = 0 ;         // Reset count
+    TIMER_A0->CTL = (TIMER_A_CTL_SSEL__SMCLK | TIMER_A_CTL_ID__8 | TIMER_A_CTL_MC_1) ; //Set SMCLK Multiplexer mode clock source, divide by 8
+        // and Up mode (BIT5,BIT4 = 01) and enable interrupt for timer register (enable TAIE flag)
+    TIMER_A0->CCR[1] = 23437;    // First Value to count to TAxCCRn holds the data for the comparison to the timer value
+    //in the Timer_A Register, TAxR. (Gives pulse width with 50% Duty Cycle)
+    TIMER_A0->CCR[0] = 46874; // Second Value to count to TAxCCRn holds the data for the comparison to the timer value
+    //in the Timer_A Register, TAxR. 
+    TIMER_A0->CCTL[1] = TIMER_A_CCTLN_OUTMOD_6;   // Capture/Compare interrupt enabled @ peripheral  (CCIE flag enabled)
+    TIMER_A0->CTL &= ~(TIMER_A_CCTLN_CAP); // set BIT8 to zero to set to compare mode (CAP = 0)
+    TIMER_A0->CTL &= ~TIMER_A_CTL_IFG;  //Clear TAIFG interrupt (BIT0)
+
+    /*CONFIGURE RED LED LIGHT*/
+    P1->SEL0 &= ~BIT0; //General I/O Mode
+    P1->SEL1 &= ~BIT0;
+    P1->DIR |= BIT0; //Set P1.0 LED to output
+    P1->OUT &= ~BIT0; //Output set to LOW
+    /* Enable Interrupts in the NVIC */
+    /* Enable Interrupts in the NVIC */
+    TIMER_A0->CCTL[0] |= TIMER_A_CCTLN_CCIE;   // Capture/Compare interrupt enabled @ peripheral  (CCIE flag enabled)
+        TIMER_A0->CTL &= ~(TIMER_A_CCTLN_CAP); // set BIT8 to zero to set to compare mode (CAP = 0)
+        TIMER_A0->CCTL[0] &= ~TIMER_A_CCTLN_CCIFG ; //Clear CCIFG interrupt (BIT0)
+        TIMER_A0->CTL &= ~TIMER_A_CTL_IFG;  //Clear TAIFG interrupt (BIT0)
+        /* Enable Interrupts in the NVIC */
+          NVIC_EnableIRQ(TA0_0_IRQn );
+}
+#endif
+
+
